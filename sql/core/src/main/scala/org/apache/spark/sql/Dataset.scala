@@ -217,6 +217,7 @@ class Dataset[T] private[sql](
   @transient lazy val sqlContext: SQLContext = sparkSession.sqlContext
 
   private[sql] def resolve(colName: String): NamedExpression = {
+    cache()
     queryExecution.analyzed.resolveQuoted(colName, sparkSession.sessionState.analyzer.resolver)
       .getOrElse {
         throw new AnalysisException(
@@ -225,6 +226,7 @@ class Dataset[T] private[sql](
   }
 
   private[sql] def numericColumns: Seq[Expression] = {
+    cache()
     schema.fields.filter(_.dataType.isInstanceOf[NumericType]).map { n =>
       queryExecution.analyzed.resolveQuoted(n.name, sparkSession.sessionState.analyzer.resolver).get
     }
@@ -355,6 +357,7 @@ class Dataset[T] private[sql](
       sb.append(s"only showing top $numRows $rowsString\n")
     }
 
+    cache()
     sb.toString()
   }
 
@@ -373,6 +376,7 @@ class Dataset[T] private[sql](
           builder.append(" ... " + (schema.length - 2) + " more fields")
         }
       }
+      cache()
       builder.append("]").toString()
     } catch {
       case NonFatal(e) =>
@@ -838,6 +842,7 @@ class Dataset[T] private[sql](
    * @since 2.0.0
    */
   def join(right: Dataset[_]): DataFrame = withPlan {
+    cache()
     Join(planWithBarrier, right.planWithBarrier, joinType = Inner, None)
   }
 
@@ -915,6 +920,7 @@ class Dataset[T] private[sql](
   def join(right: Dataset[_], usingColumns: Seq[String], joinType: String): DataFrame = {
     // Analyze the self join. The assumption is that the analyzer will disambiguate left vs right
     // by creating a new instance for one of the branch.
+    cache()
     val joined = sparkSession.sessionState.executePlan(
       Join(planWithBarrier, right.planWithBarrier, joinType = JoinType(joinType), None))
       .analyzed.asInstanceOf[Join]
@@ -976,6 +982,7 @@ class Dataset[T] private[sql](
 
     // Trigger analysis so in the case of self-join, the analyzer will clone the plan.
     // After the cloning, left and right side will have distinct expression ids.
+    cache()
     val plan = withPlan(
       Join(planWithBarrier, right.planWithBarrier, JoinType(joinType), Some(joinExprs.expr)))
       .queryExecution.analyzed.asInstanceOf[Join]
@@ -1024,6 +1031,7 @@ class Dataset[T] private[sql](
    * @since 2.1.0
    */
   def crossJoin(right: Dataset[_]): DataFrame = withPlan {
+    cache()
     Join(planWithBarrier, right.planWithBarrier, joinType = Cross, None)
   }
 
@@ -1054,6 +1062,7 @@ class Dataset[T] private[sql](
   def joinWith[U](other: Dataset[U], condition: Column, joinType: String): Dataset[(T, U)] = {
     // Creates a Join node and resolve it first, to get join condition resolved, self-join resolved,
     // etc.
+    cache()
     val joined = sparkSession.sessionState.executePlan(
       Join(
         this.planWithBarrier,
@@ -1154,6 +1163,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def sortWithinPartitions(sortExprs: Column*): Dataset[T] = {
+    cache()
     sortInternal(global = false, sortExprs)
   }
 
@@ -1244,8 +1254,10 @@ class Dataset[T] private[sql](
    */
   def col(colName: String): Column = colName match {
     case "*" =>
+      cache()
       Column(ResolvedStar(queryExecution.analyzed.output))
     case _ =>
+      cache()
       if (sqlContext.conf.supportQuotedRegexColumnName) {
         colRegex(colName)
       } else {
@@ -1260,6 +1272,7 @@ class Dataset[T] private[sql](
    * @since 2.3.0
    */
   def colRegex(colName: String): Column = {
+    cache()
     val caseSensitive = sparkSession.sessionState.conf.caseSensitiveAnalysis
     colName match {
       case ParserUtils.escapedIdentifier(columnNameRegex) =>
@@ -1278,6 +1291,7 @@ class Dataset[T] private[sql](
    * @since 1.6.0
    */
   def as(alias: String): Dataset[T] = withTypedPlan {
+    cache()
     SubqueryAlias(alias, planWithBarrier)
   }
 
@@ -1316,6 +1330,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def select(cols: Column*): DataFrame = withPlan {
+    cache()
     Project(cols.map(_.named), planWithBarrier)
   }
 
@@ -1350,6 +1365,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def selectExpr(exprs: String*): DataFrame = {
+    cache()
     select(exprs.map { expr =>
       Column(sparkSession.sessionState.sqlParser.parseExpression(expr))
     }: _*)
@@ -1370,6 +1386,7 @@ class Dataset[T] private[sql](
   @Experimental
   @InterfaceStability.Evolving
   def select[U1](c1: TypedColumn[T, U1]): Dataset[U1] = {
+    cache()
     implicit val encoder = c1.encoder
     val project = Project(c1.withInputType(exprEnc, planWithBarrier.output).named :: Nil,
       planWithBarrier)
@@ -1388,6 +1405,7 @@ class Dataset[T] private[sql](
    * that cast appropriately for the user facing interface.
    */
   protected def selectUntyped(columns: TypedColumn[_, _]*): Dataset[_] = {
+    cache()
     val encoders = columns.map(_.encoder)
     val namedColumns =
       columns.map(_.withInputType(exprEnc, planWithBarrier.output).named)
@@ -1467,6 +1485,7 @@ class Dataset[T] private[sql](
    * @since 1.6.0
    */
   def filter(condition: Column): Dataset[T] = withTypedPlan {
+    cache()
     Filter(condition.expr, planWithBarrier)
   }
 
@@ -1529,6 +1548,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def groupBy(cols: Column*): RelationalGroupedDataset = {
+    cache()
     RelationalGroupedDataset(toDF(), cols.map(_.expr), RelationalGroupedDataset.GroupByType)
   }
 
@@ -1577,6 +1597,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def cube(cols: Column*): RelationalGroupedDataset = {
+    cache()
     RelationalGroupedDataset(toDF(), cols.map(_.expr), RelationalGroupedDataset.CubeType)
   }
 
@@ -1602,6 +1623,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def groupBy(col1: String, cols: String*): RelationalGroupedDataset = {
+    cache()
     val colNames: Seq[String] = col1 +: cols
     RelationalGroupedDataset(
       toDF(), colNames.map(colName => resolve(colName)), RelationalGroupedDataset.GroupByType)
@@ -1644,6 +1666,7 @@ class Dataset[T] private[sql](
   @Experimental
   @InterfaceStability.Evolving
   def groupByKey[K: Encoder](func: T => K): KeyValueGroupedDataset[K, T] = {
+    cache()
     val inputPlan = planWithBarrier
     val withGroupingKey = AppendColumns(func, inputPlan)
     val executed = sparkSession.sessionState.executePlan(withGroupingKey)
@@ -3289,6 +3312,7 @@ class Dataset[T] private[sql](
   }
 
   private def sortInternal(global: Boolean, sortExprs: Seq[Column]): Dataset[T] = {
+    cache()
     val sortOrder: Seq[SortOrder] = sortExprs.map { col =>
       col.expr match {
         case expr: SortOrder =>
