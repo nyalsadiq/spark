@@ -19,24 +19,20 @@ package org.apache.spark.sql.execution
 
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
-import scala.collection.JavaConverters._
-
 import org.apache.hadoop.fs.{FileSystem, Path}
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.SubqueryExpression
 import org.apache.spark.sql.catalyst.plans.logical.{AnalysisBarrier, LogicalPlan, ResolvedHint}
-import org.apache.spark.sql.execution.caching.LFUCache
+import org.apache.spark.sql.execution.caching.TinyLFUCache
 import org.apache.spark.sql.execution.columnar.InMemoryRelation
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK
 
 /** Holds a cached logical plan and its data */
-case class CachedData(plan: LogicalPlan, cachedRepresentation: InMemoryRelation) {
-  def compare(that: CachedData): Int = plan.frequency.compareTo(this.plan.frequency)
-}
+case class CachedData(plan: LogicalPlan, cachedRepresentation: InMemoryRelation)
 
 /**
  * Provides support in a SQLContext for caching query results and automatically using these cached
@@ -49,7 +45,7 @@ case class CachedData(plan: LogicalPlan, cachedRepresentation: InMemoryRelation)
 class CacheManager extends Logging {
 
   @transient
-  private val cachedData = new LFUCache
+  private val cachedData = new TinyLFUCache
 
   @transient
   private val cacheLock = new ReentrantReadWriteLock
@@ -74,15 +70,12 @@ class CacheManager extends Logging {
 
   /** Clears all cached tables. */
   def clearCache(): Unit = writeLock {
-    cachedData.getCachedData
-              .asScala
-              .foreach(_.cachedRepresentation.cachedColumnBuffers.unpersist())
-    cachedData.getCachedData.clear()
+    cachedData.clear()
   }
 
   /** Checks if the cache is empty. */
   def isEmpty: Boolean = readLock {
-    cachedData.getCachedData.isEmpty
+    cachedData.isEmpty
   }
 
   /**
@@ -106,6 +99,7 @@ class CacheManager extends Logging {
         tableName,
         planToCache.stats)
       cachedData.add(CachedData(planToCache, inMemoryRelation))
+      sparkSession.sparkContext.env.blockManager
     }
   }
 
@@ -120,14 +114,7 @@ class CacheManager extends Logging {
    * Un-cache all the cache entries that refer to the given plan.
    */
   def uncacheQuery(spark: SparkSession, plan: LogicalPlan, blocking: Boolean): Unit = writeLock {
-    val it = cachedData.getCachedData.iterator()
-    while (it.hasNext) {
-      val cd = it.next()
-      if (cd.plan.find(_.sameResult(plan)).isDefined) {
-        cd.cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
-        it.remove()
-      }
-    }
+    cachedData.uncacheQuery(plan, blocking)
   }
 
   /**
@@ -138,7 +125,7 @@ class CacheManager extends Logging {
   }
 
   private def recacheByCondition(spark: SparkSession, condition: LogicalPlan => Boolean): Unit = {
-    val it = cachedData.getCachedData.iterator()
+    val it = cachedData.getIterator
     val needToRecache = scala.collection.mutable.ArrayBuffer.empty[CachedData]
     while (it.hasNext) {
       val cd = it.next()
@@ -168,7 +155,7 @@ class CacheManager extends Logging {
 
   /** Optionally returns cached data for the given [[LogicalPlan]]. */
   def lookupCachedData(plan: LogicalPlan): Option[CachedData] = readLock {
-    cachedData.getCachedData.asScala.find(cd => plan.sameResult(cd.plan))
+    cachedData.get(plan)
   }
 
   /** Replaces segments of the given logical plan with cached versions where possible. */

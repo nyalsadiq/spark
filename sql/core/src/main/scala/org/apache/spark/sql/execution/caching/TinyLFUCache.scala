@@ -17,30 +17,57 @@
 
 package org.apache.spark.sql.execution.caching
 
-import com.github.blemale.scaffeine.{ Cache, Scaffeine }
+import java.util
+
+import scala.collection.JavaConverters._
+
+import com.github.blemale.scaffeine.{Cache, Scaffeine}
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
 
-class TinyLFUCache extends Logging {
+class TinyLFUCache extends Logging with DatasetCache {
 
-  private val CACHE_SIZE = 10
+  val CACHE_SIZE = 10
 
   private val cachedData: Cache[Int, CachedData] = Scaffeine()
     .recordStats()
     .maximumSize(CACHE_SIZE)
     .build[Int, CachedData]()
 
-
   def get(item: CachedData): Option[CachedData] = {
     cachedData.getIfPresent(item.plan.semanticHash())
+  }
+
+  def get(item: LogicalPlan): Option[CachedData] = {
+    cachedData.getIfPresent(item.semanticHash())
   }
 
   def add(item: CachedData): Unit = {
     cachedData.put(item.plan.semanticHash(), item)
   }
 
-  def getCachedData: Iterable[CachedData] = cachedData.asMap().values
+  def clear(): Unit = {
+    cachedData.asMap().foreach(pair => pair._2.cachedRepresentation.cachedColumnBuffers.unpersist())
+    cachedData.invalidateAll()
+  }
+
+  def isEmpty: Boolean = cachedData.asMap().isEmpty
+
+  def getIterator: util.Iterator[CachedData] = cachedData.asMap().valuesIterator.asJava
+
+  def uncacheQuery(plan: LogicalPlan, blocking: Boolean): Unit = {
+    val it = getIterator
+    while (it.hasNext) {
+      val cd = it.next()
+      if (cd.plan.find(_.sameResult(plan)).isDefined) {
+        cachedData.invalidate(cd.plan.semanticHash())
+        cd.cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
+        it.remove()
+      }
+    }
+  }
 
 }

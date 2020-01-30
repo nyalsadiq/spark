@@ -19,7 +19,6 @@ package org.apache.spark.storage.memory
 
 import java.io.OutputStream
 import java.nio.ByteBuffer
-import java.util.LinkedHashMap
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -38,7 +37,7 @@ import org.apache.spark.util.{SizeEstimator, Utils}
 import org.apache.spark.util.collection.SizeTrackingVector
 import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
 
-private sealed trait MemoryEntry[T] {
+trait MemoryEntry[T] {
   def size: Long
   def memoryMode: MemoryMode
   def classTag: ClassTag[T]
@@ -88,7 +87,7 @@ private[spark] class MemoryStore(
   // Note: all changes to memory allocations, notably putting blocks, evicting blocks, and
   // acquiring or releasing unroll memory, must be synchronized on `memoryManager`!
 
-  private val entries = new LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
+  private val entries = new FIFOCache
 
   // A mapping from taskAttemptId to amount of memory used for unrolling a block (in bytes)
   // All accesses of this map are assumed to have manually synchronized on `memoryManager`
@@ -514,18 +513,18 @@ private[spark] class MemoryStore(
       // (because of getValue or getBytes) while traversing the iterator, as that
       // can lead to exceptions.
       entries.synchronized {
-        val iterator = entries.entrySet().iterator()
+        val iterator = entries.getIterator
         while (freedMemory < space && iterator.hasNext) {
           val pair = iterator.next()
-          val blockId = pair.getKey
-          val entry = pair.getValue
+          val blockId = pair._1
+          val entry = pair._2
           if (blockIsEvictable(blockId, entry)) {
             // We don't want to evict blocks which are currently being read, so we need to obtain
             // an exclusive write lock on blocks which are candidates for eviction. We perform a
             // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
             if (blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
               selectedBlocks += blockId
-              freedMemory += pair.getValue.size
+              freedMemory += pair._2.size
             }
           }
         }
@@ -598,7 +597,7 @@ private[spark] class MemoryStore(
   protected def afterDropAction(blockId: BlockId): Unit = {}
 
   def contains(blockId: BlockId): Boolean = {
-    entries.synchronized { entries.containsKey(blockId) }
+    entries.synchronized { entries.contains(blockId) }
   }
 
   private def currentTaskAttemptId(): Long = {

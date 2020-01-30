@@ -20,21 +20,60 @@ package org.apache.spark.sql.execution.caching
 import java.util
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
-class LIFOCache extends Logging {
+class LIFOCache extends Logging with DatasetCache {
 
   private val cachedData = new java.util.ArrayDeque[CachedData]
-  private val CACHE_SIZE = 10
+  private val index = new util.HashMap[Int, CachedData]()
+  val CACHE_SIZE = 10
 
   def add(item: CachedData): Unit = {
     if (cachedData.size >= CACHE_SIZE) {
       logWarning("FIFO cache full")
-      cachedData.removeFirst().cachedRepresentation.cachedColumnBuffers.unpersist()
+      val toRemove = cachedData.removeFirst()
+      index.remove(toRemove.plan.semanticHash())
+      toRemove.cachedRepresentation.cachedColumnBuffers.unpersist()
     }
     cachedData.addLast(item)
+    index.put(item.plan.semanticHash(), item)
   }
 
-  def getCachedData(): util.Deque[CachedData] = cachedData
+  def uncacheQuery(plan: LogicalPlan, blocking: Boolean): Unit = {
+    val it = cachedData.iterator()
+    while (it.hasNext) {
+      val cd = it.next()
+      if (cd.plan.find(_.sameResult(plan)).isDefined) {
+        index.remove(cd.plan.semanticHash())
+        cd.cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
+        it.remove()
+      }
+    }
+  }
 
+  def get(item: CachedData): Option[CachedData] = {
+    if (index.containsKey(item.plan.semanticHash())) {
+      Option.apply(index.get(item.plan.semanticHash()))
+    }
+    Option.empty
+  }
+
+  def get(item: LogicalPlan): Option[CachedData] = {
+    if (index.containsKey(item.semanticHash())) {
+      Option.apply(index.get(item.semanticHash()))
+    }
+    Option.empty
+  }
+
+  def clear(): Unit = {
+    index.clear()
+    cachedData.clear()
+  }
+
+  def isEmpty: Boolean = {
+    cachedData.isEmpty
+  }
+
+  def getIterator: util.Iterator[CachedData] = cachedData.iterator()
 }

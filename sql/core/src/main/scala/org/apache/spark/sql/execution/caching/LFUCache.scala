@@ -20,12 +20,13 @@ package org.apache.spark.sql.execution.caching
 import java.util
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
 
-class LFUCache extends Logging {
+class LFUCache extends Logging with DatasetCache {
 
-  private val CACHE_SIZE = 10
+  val CACHE_SIZE = 10
   private var min = -1
   private val cachedData = new util.HashMap[Int, CachedData]
   private val keyToCount = new util.HashMap[Int, Int]
@@ -33,6 +34,21 @@ class LFUCache extends Logging {
 
   def get(item: CachedData): CachedData = {
     val key = item.plan.semanticHash()
+
+    if (!cachedData.containsKey(key)) return null
+
+    val count = keyToCount.get(key)
+    countToKeys.get(count).remove(key)
+
+    if (count == min && countToKeys.get(count).size() == 0) min += 1
+
+    putCount(key, count + 1)
+
+    cachedData.get(key)
+  }
+
+  def get(item: LogicalPlan): CachedData = {
+    val key = item.semanticHash()
 
     if (!cachedData.containsKey(key)) return null
 
@@ -75,6 +91,28 @@ class LFUCache extends Logging {
     countToKeys.get(count).add(key)
   }
 
-  def getCachedData: util.Collection[CachedData] = cachedData.values()
+  def clear(): Unit = {
+    cachedData.clear()
+    keyToCount.clear()
+    countToKeys.clear()
+    min = -1
+  }
 
+  override def isEmpty: Boolean = {
+    cachedData.isEmpty
+  }
+
+  override def getIterator: util.Iterator[CachedData] = {
+    cachedData.values().iterator()
+  }
+
+  override def uncacheQuery(plan: LogicalPlan, blocking: Boolean): Unit = {
+    val it = getIterator
+    while (it.hasNext) {
+      val cd = it.next()
+      if (cd.plan.find(_.sameResult(plan)).isDefined) {
+        evict(cd.plan.semanticHash())
+      }
+    }
+  }
 }
