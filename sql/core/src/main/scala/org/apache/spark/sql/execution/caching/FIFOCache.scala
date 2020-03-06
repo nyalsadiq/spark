@@ -19,6 +19,8 @@ package org.apache.spark.sql.execution.caching
 
 import java.util
 
+import scala.collection.JavaConverters._
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
@@ -74,6 +76,7 @@ class FIFOCache(cacheSize: Int) extends Logging with DatasetCache {
   }
 
   def clear(): Unit = {
+    cachedData.asScala.foreach(_.cachedRepresentation.cachedColumnBuffers.unpersist())
     index.clear()
     cachedData.clear()
   }

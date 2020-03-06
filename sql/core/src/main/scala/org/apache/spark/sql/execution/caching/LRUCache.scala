@@ -25,26 +25,15 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
+class LRUCache (cacheSize: Int) extends Logging with DatasetCache {
 
-class LFUCache(cacheSize: Int) extends Logging with DatasetCache {
-
+  private val cachedData = new util.LinkedHashMap[Int, CachedData](32, 0.75f, true)
   val CACHE_SIZE: Int = cacheSize
-  private var min = -1
-  private val cachedData = new util.HashMap[Int, CachedData]
-  private val keyToCount = new util.HashMap[Int, Int]
-  private val countToKeys = new util.HashMap[Int, util.LinkedHashSet[Integer]]
 
   def get(item: CachedData): Option[CachedData] = {
     val key = item.plan.semanticHash()
 
     if (!cachedData.containsKey(key)) return Option.empty
-
-    val count = keyToCount.get(key)
-    countToKeys.get(count).remove(key)
-
-    if (count == min && countToKeys.get(count).size() == 0) min += 1
-
-    putCount(key, count + 1)
 
     Option(cachedData.get(key))
   }
@@ -54,74 +43,33 @@ class LFUCache(cacheSize: Int) extends Logging with DatasetCache {
 
     if (!cachedData.containsKey(key)) return Option.empty
 
-    val count = keyToCount.get(key)
-    countToKeys.get(count).remove(key)
-
-    if (count == min && countToKeys.get(count).size() == 0) min += 1
-
-    putCount(key, count + 1)
-
     Option(cachedData.get(key))
   }
 
   def add(item: CachedData): Unit = {
-    val key = item.plan.semanticHash()
-
-    logWarning("Adding: " + key + ", CacheSize: " + keyToCount.size())
-
-    if (cachedData.containsKey(key)) {
-      cachedData.put(key, item)
-      get(item)
-      return
-    }
-
-    if (cachedData.size() >= CACHE_SIZE) {
-      evict(countToKeys.get(min).iterator().next())
-    }
-
-    min = 1
-    putCount(key, min)
-    cachedData.put(key, item)
-
-    logWarning("Added: " + key + ", CacheSize: " + keyToCount.size())
-  }
-
-  private def evict(key: Int) {
-    logError("EVICTION!")
-    countToKeys.get(min).remove(key)
-    cachedData.remove(key).cachedRepresentation.cachedColumnBuffers.unpersist()
-  }
-
-  private def putCount(key: Int, count: Int): Unit = {
-    keyToCount.put(key, count)
-    if (!countToKeys.containsKey(count)) {
-      countToKeys.put(count, new util.LinkedHashSet[Integer]())
-    }
-    countToKeys.get(count).add(key)
+    cachedData.put(item.plan.semanticHash(), item)
   }
 
   def clear(): Unit = {
     cachedData.asScala.foreach(_._2.cachedRepresentation.cachedColumnBuffers.unpersist())
     cachedData.clear()
-    keyToCount.clear()
-    countToKeys.clear()
-    min = -1
   }
 
-  override def isEmpty: Boolean = {
+  def isEmpty: Boolean = {
     cachedData.isEmpty
   }
 
-  override def getIterator: util.Iterator[CachedData] = {
+  def getIterator: util.Iterator[CachedData] = {
     cachedData.values().iterator()
   }
 
-  override def uncacheQuery(plan: LogicalPlan, blocking: Boolean): Unit = {
+  def uncacheQuery(plan: LogicalPlan, blocking: Boolean): Unit = {
     val it = getIterator
     while (it.hasNext) {
       val cd = it.next()
       if (cd.plan.find(_.sameResult(plan)).isDefined) {
-        evict(cd.plan.semanticHash())
+        cd.cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
+        it.remove()
       }
     }
   }
