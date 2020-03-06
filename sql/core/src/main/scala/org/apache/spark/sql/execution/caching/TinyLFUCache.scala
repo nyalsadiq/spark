@@ -21,6 +21,7 @@ import java.util
 
 import scala.collection.JavaConverters._
 
+import com.github.benmanes.caffeine.cache.RemovalCause
 import com.github.blemale.scaffeine.{Cache, Scaffeine}
 
 import org.apache.spark.internal.Logging
@@ -28,14 +29,19 @@ import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
 
-class TinyLFUCache extends Logging with DatasetCache {
+class TinyLFUCache(cacheSize: Int) extends Logging with DatasetCache {
 
-  val CACHE_SIZE = 10
+  val CACHE_SIZE: Int = cacheSize
 
   private val cachedData: Cache[Int, CachedData] = Scaffeine()
     .recordStats()
     .maximumSize(CACHE_SIZE)
+    .removalListener(removalListener)
     .build[Int, CachedData]()
+
+  def removalListener(key: Int, value: CachedData, removalCause: RemovalCause): Unit = {
+    value.cachedRepresentation.cachedColumnBuffers.unpersist()
+  }
 
   def get(item: CachedData): Option[CachedData] = {
     cachedData.getIfPresent(item.plan.semanticHash())

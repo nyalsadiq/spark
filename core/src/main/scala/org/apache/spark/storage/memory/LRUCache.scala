@@ -16,46 +16,38 @@
  */
 
 package org.apache.spark.storage.memory
+
 import java.util
+
+import scala.collection.JavaConverters._
 
 import org.apache.spark.storage.BlockId
 
-class FIFOCache extends BlockCache {
-
-  private val cachedData = new java.util.ArrayDeque[(BlockId, MemoryEntry[_])]
-  private val index = new util.HashMap[BlockId, MemoryEntry[_]]()
+class LRUCache extends BlockCache {
+  private val cachedData = new util.LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
 
   def get(blockId: BlockId): MemoryEntry[_] = {
-     index.get(blockId)
+    cachedData.get(blockId)
   }
 
   def put(blockId: BlockId, entry: MemoryEntry[_]): Unit = {
-    cachedData.addLast((blockId, entry))
-    index.put(blockId, entry)
+    cachedData.put(blockId, entry)
   }
 
   def contains(blockId: BlockId): Boolean = {
-    index.containsKey(blockId)
+    cachedData.containsKey(blockId)
   }
 
   def remove(blockId: BlockId): MemoryEntry[_] = {
-    val it = cachedData.iterator()
-    while(it.hasNext) {
-      val pair = it.next()
-      if (pair._1.equals(blockId)) {
-        it.remove()
-      }
-    }
-    index.remove(blockId)
+    cachedData.remove(blockId)
   }
 
   def getIterator: util.Iterator[(BlockId, MemoryEntry[_])] = {
-    cachedData.iterator()
+    cachedData.asScala.iterator.asJava
   }
 
   def clear(): Unit = {
     cachedData.clear()
-    index.clear()
   }
 
   def isEmpty: Boolean = {

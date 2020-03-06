@@ -51,6 +51,16 @@
       <artifactId>chill_${scala.binary.version}</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+      <version>2.5.5</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.blemale</groupId>
+      <artifactId>scaffeine_2.11</artifactId>
+      <version>3.1.0</version>
+    </dependency>
+    <dependency>
       <groupId>com.twitter</groupId>
       <artifactId>chill-java</artifactId>
     </dependency>

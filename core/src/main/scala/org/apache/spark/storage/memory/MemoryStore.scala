@@ -87,7 +87,21 @@ private[spark] class MemoryStore(
   // Note: all changes to memory allocations, notably putting blocks, evicting blocks, and
   // acquiring or releasing unroll memory, must be synchronized on `memoryManager`!
 
-  private val entries = new FIFOCache
+  private val entries = setCachingStrategy()
+
+  def setCachingStrategy(): BlockCache = {
+    val strategy = conf.getCachingScheme()
+
+    logWarning("SET BLOCK CACHE STRATEGY: " + strategy)
+
+    strategy match {
+      case "LFU" => new LFUCache
+      case "FIFO" => new FIFOCache
+      case "LIFO" => new LIFOCache
+      case "LRU" => new LRUCache
+      case _ => new LRUCache
+    }
+  }
 
   // A mapping from taskAttemptId to amount of memory used for unrolling a block (in bytes)
   // All accesses of this map are assumed to have manually synchronized on `memoryManager`

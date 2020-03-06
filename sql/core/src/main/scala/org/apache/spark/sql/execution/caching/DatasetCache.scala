@@ -25,13 +25,10 @@ import org.apache.spark.sql.execution.CachedData
 trait DatasetCache {
   val CACHE_SIZE: Int
   def get(item: CachedData): Option[CachedData]
+  def get(item: LogicalPlan): Option[CachedData]
   def add(item: CachedData): Unit
   def clear(): Unit
   def isEmpty: Boolean
-
-  /**
-    * @return an iterator where items are ordered by eviction priority.
-    */
   def getIterator: util.Iterator[CachedData]
   def uncacheQuery(plan: LogicalPlan, blocking: Boolean): Unit
 }

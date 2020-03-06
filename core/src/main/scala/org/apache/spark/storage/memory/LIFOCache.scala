@@ -21,7 +21,7 @@ import java.util
 
 import org.apache.spark.storage.BlockId
 
-class LIFOCache {
+class LIFOCache extends BlockCache {
   private val cachedData = new java.util.ArrayDeque[(BlockId, MemoryEntry[_])]
   private val index = new util.HashMap[BlockId, MemoryEntry[_]]()
 
@@ -39,7 +39,13 @@ class LIFOCache {
   }
 
   def remove(blockId: BlockId): MemoryEntry[_] = {
-    cachedData.removeIf(_._1.equals(blockId))
+    val it = cachedData.iterator()
+    while(it.hasNext) {
+      val pair = it.next()
+      if (pair._1.equals(blockId)) {
+        it.remove()
+      }
+    }
     index.remove(blockId)
   }
 

@@ -120,6 +120,30 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
     set("spark.app.name", name)
   }
 
+  def setCachingScheme(scheme: String): SparkConf = {
+    set("spark.block.scheme", scheme)
+  }
+
+  def getCachingScheme(): String = {
+    get("spark.block.scheme")
+  }
+
+  def setSQLCacheSize(size: String): SparkConf = {
+    set("spark.sql.cache.size", size)
+  }
+
+  def getSQLCacheSize(): String = {
+    get("spark.sql.cache.size")
+  }
+
+  def setSQLCachingScheme(scheme: String): SparkConf = {
+    set("spark.sql.scheme", scheme)
+  }
+
+  def getSQLCachingScheme(): String = {
+    get("spark.sql.scheme")
+  }
+
   /** Set JAR files to distribute to the cluster. */
   def setJars(jars: Seq[String]): SparkConf = {
     for (jar <- jars if (jar == null)) logWarning("null jar passed to SparkContext constructor")

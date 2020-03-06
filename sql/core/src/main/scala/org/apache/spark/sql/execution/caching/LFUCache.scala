@@ -24,18 +24,18 @@ import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
 
-class LFUCache extends Logging with DatasetCache {
+class LFUCache(cacheSize: Int) extends Logging with DatasetCache {
 
-  val CACHE_SIZE = 10
+  val CACHE_SIZE: Int = cacheSize
   private var min = -1
   private val cachedData = new util.HashMap[Int, CachedData]
   private val keyToCount = new util.HashMap[Int, Int]
   private val countToKeys = new util.HashMap[Int, util.LinkedHashSet[Integer]]
 
-  def get(item: CachedData): CachedData = {
+  def get(item: CachedData): Option[CachedData] = {
     val key = item.plan.semanticHash()
 
-    if (!cachedData.containsKey(key)) return null
+    if (!cachedData.containsKey(key)) return Option.empty
 
     val count = keyToCount.get(key)
     countToKeys.get(count).remove(key)
@@ -44,13 +44,13 @@ class LFUCache extends Logging with DatasetCache {
 
     putCount(key, count + 1)
 
-    cachedData.get(key)
+    Option(cachedData.get(key))
   }
 
-  def get(item: LogicalPlan): CachedData = {
+  def get(item: LogicalPlan): Option[CachedData] = {
     val key = item.semanticHash()
 
-    if (!cachedData.containsKey(key)) return null
+    if (!cachedData.containsKey(key)) return Option.empty
 
     val count = keyToCount.get(key)
     countToKeys.get(count).remove(key)
@@ -59,11 +59,13 @@ class LFUCache extends Logging with DatasetCache {
 
     putCount(key, count + 1)
 
-    cachedData.get(key)
+    Option(cachedData.get(key))
   }
 
   def add(item: CachedData): Unit = {
     val key = item.plan.semanticHash()
+
+    logWarning("Adding: " + key + ", CacheSize: " + keyToCount.size())
 
     if (cachedData.containsKey(key)) {
       cachedData.put(key, item)
@@ -78,16 +80,21 @@ class LFUCache extends Logging with DatasetCache {
     min = 1
     putCount(key, min)
     cachedData.put(key, item)
+
+    logWarning("Added: " + key + ", CacheSize: " + keyToCount.size())
   }
 
   private def evict(key: Int) {
+    logError("EVICTION!")
     countToKeys.get(min).remove(key)
     cachedData.remove(key).cachedRepresentation.cachedColumnBuffers.unpersist()
   }
 
   private def putCount(key: Int, count: Int): Unit = {
     keyToCount.put(key, count)
-    countToKeys.computeIfAbsent(count, _ => new util.LinkedHashSet[Integer]())
+    if (!countToKeys.containsKey(count)) {
+      countToKeys.put(count, new util.LinkedHashSet[Integer]())
+    }
     countToKeys.get(count).add(key)
   }
 

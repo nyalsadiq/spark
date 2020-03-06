@@ -21,11 +21,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 
 import org.apache.hadoop.fs.{FileSystem, Path}
 
+import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.SubqueryExpression
 import org.apache.spark.sql.catalyst.plans.logical.{AnalysisBarrier, LogicalPlan, ResolvedHint}
-import org.apache.spark.sql.execution.caching.TinyLFUCache
+import org.apache.spark.sql.execution.caching._
 import org.apache.spark.sql.execution.columnar.InMemoryRelation
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.storage.StorageLevel
@@ -42,10 +43,26 @@ case class CachedData(plan: LogicalPlan, cachedRepresentation: InMemoryRelation)
  *
  * Internal to Spark SQL.
  */
-class CacheManager extends Logging {
+class CacheManager(sparkContext: SparkContext) extends Logging {
 
   @transient
-  private val cachedData = new TinyLFUCache
+  private val cachedData = setCachingStrategy()
+
+  def setCachingStrategy(): DatasetCache = {
+    val strategy = sparkContext.conf.getSQLCachingScheme()
+    val size = sparkContext.conf.getSQLCacheSize().toInt
+
+    logWarning("SET SQL CACHE STRATEGY: " + strategy)
+    logWarning("SET SQL CACHE SIZE: " + size)
+
+    strategy match {
+      case "LFU" => new LFUCache(size)
+      case "FIFO" => new FIFOCache(size)
+      case "LIFO" => new LIFOCache(size)
+      case "TINY" => new TinyLFUCache(size)
+      case _ => new LFUCache(size)
+    }
+  }
 
   @transient
   private val cacheLock = new ReentrantReadWriteLock
@@ -99,7 +116,6 @@ class CacheManager extends Logging {
         tableName,
         planToCache.stats)
       cachedData.add(CachedData(planToCache, inMemoryRelation))
-      sparkSession.sparkContext.env.blockManager
     }
   }
 

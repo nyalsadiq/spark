@@ -23,13 +23,17 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.CachedData
 
-class LIFOCache extends Logging with DatasetCache {
+class LIFOCache(cacheSize: Int) extends Logging with DatasetCache {
 
   private val cachedData = new java.util.ArrayDeque[CachedData]
   private val index = new util.HashMap[Int, CachedData]()
-  val CACHE_SIZE = 10
+  val CACHE_SIZE: Int = cacheSize
 
   def add(item: CachedData): Unit = {
+    if (index.containsKey(item.plan.semanticHash())) {
+      return
+    }
+
     if (cachedData.size >= CACHE_SIZE) {
       logWarning("FIFO cache full")
       val toRemove = cachedData.removeFirst()
