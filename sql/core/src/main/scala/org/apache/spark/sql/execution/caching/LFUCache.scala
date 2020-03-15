@@ -67,7 +67,7 @@ class LFUCache(cacheSize: Int) extends Logging with DatasetCache {
   def add(item: CachedData): Unit = {
     val key = item.plan.semanticHash()
 
-    logWarning("Adding: " + key + ", CacheSize: " + keyToCount.size())
+    logWarning("Adding: " + key + ", CacheSize: " + cachedData.size())
 
     if (cachedData.containsKey(key)) {
       cachedData.put(key, item)
@@ -83,12 +83,13 @@ class LFUCache(cacheSize: Int) extends Logging with DatasetCache {
     putCount(key, min)
     cachedData.put(key, item)
 
-    logWarning("Added: " + key + ", CacheSize: " + keyToCount.size())
+    logWarning("Added: " + key + ", CacheSize: " + cachedData.size())
   }
 
   private def evict(key: Int) {
-    logError("EVICTION!")
+    logWarning("Evicting: " + key)
     countToKeys.get(min).remove(key)
+    keyToCount.remove(key)
     cachedData.remove(key).cachedRepresentation.cachedColumnBuffers.unpersist()
   }
 
