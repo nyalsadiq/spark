@@ -81,7 +81,7 @@ private[sql] class SharedState(val sparkContext: SparkContext) extends Logging {
   /**
    * Class for caching query results reused in future executions.
    */
-  val cacheManager: CacheManager = new CacheManager(sparkContext)
+  val cacheManager: CacheManager = new CacheManager()
 
   /**
    * A status store to query SQL status/metrics of this Spark application, based on SQL-specific

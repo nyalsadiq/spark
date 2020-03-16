@@ -19,14 +19,14 @@ package org.apache.spark.sql.execution
 
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
+import scala.collection.JavaConverters._
+
 import org.apache.hadoop.fs.{FileSystem, Path}
 
-import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.SubqueryExpression
 import org.apache.spark.sql.catalyst.plans.logical.{AnalysisBarrier, LogicalPlan, ResolvedHint}
-import org.apache.spark.sql.execution.caching._
 import org.apache.spark.sql.execution.columnar.InMemoryRelation
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.storage.StorageLevel
@@ -35,34 +35,11 @@ import org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK
 /** Holds a cached logical plan and its data */
 case class CachedData(plan: LogicalPlan, cachedRepresentation: InMemoryRelation)
 
-/**
- * Provides support in a SQLContext for caching query results and automatically using these cached
- * results when subsequent queries are executed.  Data is cached using byte buffers stored in an
- * InMemoryRelation.  This relation is automatically substituted query plans that return the
- * `sameResult` as the originally cached query.
- *
- * Internal to Spark SQL.
- */
-class CacheManager(sparkContext: SparkContext) extends Logging {
+
+class CacheManager extends Logging {
 
   @transient
-  private val cachedData = setCachingStrategy()
-
-  def setCachingStrategy(): DatasetCache = {
-    val strategy = sparkContext.conf.getSQLCachingScheme()
-    val size = sparkContext.conf.getSQLCacheSize().toInt
-
-    logWarning("SET SQL CACHE STRATEGY: " + strategy)
-    logWarning("SET SQL CACHE SIZE: " + size)
-
-    strategy match {
-      case "LFU" => new LFUCache(size)
-      case "FIFO" => new FIFOCache(size)
-      case "LIFO" => new LIFOCache(size)
-      case "TINY" => new TinyLFUCache(size)
-      case _ => new LFUCache(size)
-    }
-  }
+  private val cachedData = new java.util.LinkedList[CachedData]
 
   @transient
   private val cacheLock = new ReentrantReadWriteLock
@@ -87,6 +64,7 @@ class CacheManager(sparkContext: SparkContext) extends Logging {
 
   /** Clears all cached tables. */
   def clearCache(): Unit = writeLock {
+    cachedData.asScala.foreach(_.cachedRepresentation.cachedColumnBuffers.unpersist())
     cachedData.clear()
   }
 
@@ -96,14 +74,14 @@ class CacheManager(sparkContext: SparkContext) extends Logging {
   }
 
   /**
-   * Caches the data produced by the logical representation of the given [[Dataset]].
-   * Unlike `RDD.cache()`, the default storage level is set to be `MEMORY_AND_DISK` because
-   * recomputing the in-memory columnar representation of the underlying table is expensive.
-   */
+    * Caches the data produced by the logical representation of the given [[Dataset]].
+    * Unlike `RDD.cache()`, the default storage level is set to be `MEMORY_AND_DISK` because
+    * recomputing the in-memory columnar representation of the underlying table is expensive.
+    */
   def cacheQuery(
-      query: Dataset[_],
-      tableName: Option[String] = None,
-      storageLevel: StorageLevel = MEMORY_AND_DISK): Unit = writeLock {
+                  query: Dataset[_],
+                  tableName: Option[String] = None,
+                  storageLevel: StorageLevel = MEMORY_AND_DISK): Unit = writeLock {
     val planToCache = query.logicalPlan
     if (lookupCachedData(planToCache).nonEmpty) {
       logWarning("Asked to cache already cached data.")
@@ -120,28 +98,35 @@ class CacheManager(sparkContext: SparkContext) extends Logging {
   }
 
   /**
-   * Un-cache all the cache entries that refer to the given plan.
-   */
+    * Un-cache all the cache entries that refer to the given plan.
+    */
   def uncacheQuery(query: Dataset[_], blocking: Boolean = true): Unit = writeLock {
     uncacheQuery(query.sparkSession, query.logicalPlan, blocking)
   }
 
   /**
-   * Un-cache all the cache entries that refer to the given plan.
-   */
+    * Un-cache all the cache entries that refer to the given plan.
+    */
   def uncacheQuery(spark: SparkSession, plan: LogicalPlan, blocking: Boolean): Unit = writeLock {
-    cachedData.uncacheQuery(plan, blocking)
+    val it = cachedData.iterator()
+    while (it.hasNext) {
+      val cd = it.next()
+      if (cd.plan.find(_.sameResult(plan)).isDefined) {
+        cd.cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
+        it.remove()
+      }
+    }
   }
 
   /**
-   * Tries to re-cache all the cache entries that refer to the given plan.
-   */
+    * Tries to re-cache all the cache entries that refer to the given plan.
+    */
   def recacheByPlan(spark: SparkSession, plan: LogicalPlan): Unit = writeLock {
     recacheByCondition(spark, _.find(_.sameResult(plan)).isDefined)
   }
 
   private def recacheByCondition(spark: SparkSession, condition: LogicalPlan => Boolean): Unit = {
-    val it = cachedData.getIterator
+    val it = cachedData.iterator()
     val needToRecache = scala.collection.mutable.ArrayBuffer.empty[CachedData]
     while (it.hasNext) {
       val cd = it.next()
@@ -171,7 +156,7 @@ class CacheManager(sparkContext: SparkContext) extends Logging {
 
   /** Optionally returns cached data for the given [[LogicalPlan]]. */
   def lookupCachedData(plan: LogicalPlan): Option[CachedData] = readLock {
-    cachedData.get(plan)
+    cachedData.asScala.find(cd => plan.sameResult(cd.plan))
   }
 
   /** Replaces segments of the given logical plan with cached versions where possible. */
@@ -196,9 +181,9 @@ class CacheManager(sparkContext: SparkContext) extends Logging {
   }
 
   /**
-   * Tries to re-cache all the cache entries that contain `resourcePath` in one or more
-   * `HadoopFsRelation` node(s) as part of its logical plan.
-   */
+    * Tries to re-cache all the cache entries that contain `resourcePath` in one or more
+    * `HadoopFsRelation` node(s) as part of its logical plan.
+    */
   def recacheByPath(spark: SparkSession, resourcePath: String): Unit = writeLock {
     val (fs, qualifiedPath) = {
       val path = new Path(resourcePath)
@@ -210,11 +195,11 @@ class CacheManager(sparkContext: SparkContext) extends Logging {
   }
 
   /**
-   * Traverses a given `plan` and searches for the occurrences of `qualifiedPath` in the
-   * [[org.apache.spark.sql.execution.datasources.FileIndex]] of any [[HadoopFsRelation]] nodes
-   * in the plan. If found, we refresh the metadata and return true. Otherwise, this method returns
-   * false.
-   */
+    * Traverses a given `plan` and searches for the occurrences of `qualifiedPath` in the
+    * [[org.apache.spark.sql.execution.datasources.FileIndex]] of any [[HadoopFsRelation]] nodes
+    * in the plan. If found, we refresh the metadata and return true. Otherwise, this method returns
+    * false.
+    */
   private def lookupAndRefresh(plan: LogicalPlan, fs: FileSystem, qualifiedPath: Path): Boolean = {
     plan match {
       case lr: LogicalRelation => lr.relation match {

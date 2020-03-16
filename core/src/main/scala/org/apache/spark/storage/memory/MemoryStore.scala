@@ -98,8 +98,7 @@ private[spark] class MemoryStore(
       case "LFU" => new LFUCache
       case "FIFO" => new FIFOCache
       case "LIFO" => new LIFOCache
-      case "LRU" => new LRUCache
-      case _ => new LRUCache
+      case _ => new FIFOCache
     }
   }
 

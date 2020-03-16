@@ -80,6 +80,7 @@ class LFUCache extends Logging with BlockCache {
 
   def remove(key: BlockId): MemoryEntry[_] = {
     countToKeys.get(min).remove(key)
+    keyToCount.remove(key)
     cachedData.remove(key).get
   }
 
